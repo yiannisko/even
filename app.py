@@ -17,10 +17,6 @@ HEADERS_TV = {
     "accept-language": "en-US,en;q=0.9",
 }
 
-HEADERS_PROXY = {
-    "User-Agent": "Mozilla/5.0 (compatible; Proxy/1.0)",
-}
-
 def get_self_url():
     return f"{request.scheme}://{request.host}"
 
@@ -48,15 +44,30 @@ def make_proxy_url(base_url, link, ext):
     return f"{self_url}/cdn/{encoded}{ext}"
 
 def process_m3u8(cdn_url):
+    parsed_cdn = urlparse(cdn_url)
+    base_domain = f"{parsed_cdn.scheme}://{parsed_cdn.netloc}"
+    
+    proxy_headers = {
+        "User-Agent": "ExoPlayer/2.18.1 (Linux; Android 11) ExoPlayerLib/2.18.1",
+        "Accept": "*/*",
+        "Origin": base_domain,
+        "Referer": base_domain + "/",
+    }
+
+    if "CF-Connecting-IP" in request.headers:
+        client_ip = request.headers.get("CF-Connecting-IP")
+        proxy_headers["X-Forwarded-For"] = client_ip
+        proxy_headers["X-Real-IP"] = client_ip
+
     try:
-        resp = SESSION.get(cdn_url, headers=HEADERS_PROXY, allow_redirects=True, timeout=15)
+        resp = SESSION.get(cdn_url, headers=proxy_headers, allow_redirects=True, timeout=15)
         resp.raise_for_status()
     except Exception as e:
         print(f"Fetch err: {e}")
         return Response("Stream offline", status=502)
 
     content_type = resp.headers.get("Content-Type", "").lower()
-    is_m3u8 = "mpegurl" in content_type or urlparse(cdn_url).path.endswith(".m3u8")
+    is_m3u8 = "mpegurl" in content_type or parsed_cdn.path.endswith(".m3u8")
 
     out_headers = {
         "Access-Control-Allow-Origin": "*",
@@ -79,9 +90,8 @@ def process_m3u8(cdn_url):
                 continue
 
             if line.startswith("#EXT-X-STREAM-INF"):
-                m = re.search(r'(BANDWIDTH=\d+)', line)
-                clean_line = f"#EXT-X-STREAM-INF:{m.group(1)}" if m else "#EXT-X-STREAM-INF:BANDWIDTH=4000000"
-                out.append(clean_line)
+                line = re.sub(r',AUDIO="[^"]+"', '', line)
+                out.append(line)
                 is_next_playlist = True
             elif line.startswith(("#EXT-X-TARGETDURATION", "#EXT-X-MEDIA-SEQUENCE", "#EXTINF", "#EXT-X-ENDLIST")):
                 out.append(line)
@@ -122,9 +132,9 @@ def process_m3u8(cdn_url):
 
     if "video" in content_type or "audio" in content_type:
         out_headers["Content-Type"] = content_type
-    elif urlparse(cdn_url).path.endswith((".m4s", ".mp4")):
+    elif parsed_cdn.path.endswith((".m4s", ".mp4")):
         out_headers["Content-Type"] = "video/mp4"
-    elif urlparse(cdn_url).path.endswith(".aac"):
+    elif parsed_cdn.path.endswith(".aac"):
         out_headers["Content-Type"] = "audio/aac"
     else:
         out_headers["Content-Type"] = "video/mp2t"

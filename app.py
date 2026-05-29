@@ -1,7 +1,7 @@
 import re
 import base64
 from urllib.parse import urlparse
-from flask import Flask, request, Response
+from flask import Flask, request, Response, stream_with_context
 import requests
 import urllib3
 
@@ -25,14 +25,13 @@ def get_self_url():
     return f"{request.scheme}://{request.host}"
 
 def encode_url(url):
-    b64 = base64.urlsafe_b64encode(url.encode('utf-8')).decode('utf-8')
-    return b64.replace('=', '')
+    return base64.urlsafe_b64encode(url.encode('utf-8')).decode('utf-8').rstrip('=')
 
 def decode_url(encoded_url):
     encoded_url = encoded_url.replace('-', '+').replace('_', '/')
-    padding = len(encoded_url) % 4
-    if padding:
-        encoded_url += "=" * (4 - padding)
+    padding = 4 - (len(encoded_url) % 4)
+    if padding != 4:
+        encoded_url += "=" * padding
     return base64.b64decode(encoded_url).decode('utf-8')
 
 def make_proxy_url(base_url, link, ext):
@@ -50,7 +49,7 @@ def make_proxy_url(base_url, link, ext):
 
 def process_m3u8(cdn_url):
     try:
-        resp = SESSION.get(cdn_url, headers=HEADERS_PROXY, allow_redirects=True, timeout=15)
+        resp = SESSION.get(cdn_url, headers=HEADERS_PROXY, allow_redirects=True, stream=True, timeout=15)
         resp.raise_for_status()
     except Exception as e:
         print(f"Fetch err: {e}")
@@ -97,7 +96,6 @@ def process_m3u8(cdn_url):
                         match = re.search(r'\.([a-z0-9]+)$', urlparse(uri).path, re.I)
                         if match:
                             ext = "." + match.group(1).lower()
-                    
                     proxied_uri = make_proxy_url(cdn_url, uri, ext)
                     line = line.replace(f'URI="{uri}"', f'URI="{proxied_uri}"')
                 out.append(line)
@@ -121,6 +119,11 @@ def process_m3u8(cdn_url):
         out_headers["Content-Type"] = "application/vnd.apple.mpegurl"
         return Response("\r\n".join(out), headers=out_headers)
 
+    def generate():
+        for chunk in resp.iter_content(chunk_size=16384):
+            if chunk:
+                yield chunk
+
     if "video" in content_type or "audio" in content_type:
         out_headers["Content-Type"] = content_type
     elif urlparse(cdn_url).path.endswith((".m4s", ".mp4")):
@@ -130,8 +133,14 @@ def process_m3u8(cdn_url):
     else:
         out_headers["Content-Type"] = "video/mp2t"
 
-    out_headers["Content-Length"] = str(len(resp.content))
-    return Response(resp.content, status=resp.status_code, headers=out_headers)
+    if "Content-Length" in resp.headers:
+        out_headers["Content-Length"] = resp.headers["Content-Length"]
+
+    return Response(
+        stream_with_context(generate()),
+        status=resp.status_code,
+        headers=out_headers
+    )
 
 def resolve_and_play(live_id):
     stream_url = f"https://dlhd.pk/stream/stream-{live_id}.php"
@@ -185,8 +194,9 @@ def health():
 @app.route("/cdn/<path:encoded_url>", methods=["GET"])
 def cdn_route(encoded_url):
     try:
-        if encoded_url.endswith((".m3u8", ".ts", ".m4s", ".mp4", ".key", ".aac")):
-            encoded_url = encoded_url[:encoded_url.rfind(".")]
+        ext_match = re.search(r'\.[a-z0-9]+$', encoded_url, re.I)
+        if ext_match:
+            encoded_url = encoded_url[:ext_match.start()]
         url = decode_url(encoded_url)
         return process_m3u8(url)
     except Exception as e:

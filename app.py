@@ -1,7 +1,7 @@
 import re
 import base64
 from urllib.parse import urlparse
-from flask import Flask, request, Response
+from flask import Flask, request, Response, stream_with_context
 import requests
 import urllib3
 
@@ -41,19 +41,15 @@ def process_m3u8(cdn_url):
         print(f"Fetch err: {e}")
         return Response("Stream offline", status=502)
 
-    content_type = resp.headers.get("Content-Type", "")
-    is_m3u8 = (
-        "mpegurl" in content_type.lower()
-        or re.search(r"\.m3u8", cdn_url, re.I)
-    )
+    content_type = resp.headers.get("Content-Type", "").lower()
+    is_m3u8 = "mpegurl" in content_type or urlparse(cdn_url).path.endswith(".m3u8")
 
     if is_m3u8:
         text = resp.content.decode('utf-8', errors='ignore')
         self_url = get_self_url()
         base_url = cdn_url[: cdn_url.rfind("/") + 1]
-        lines = text.split("\n")
+        lines = text.splitlines()
         rewritten = []
-        
         has_version = False
 
         for line in lines:
@@ -62,6 +58,8 @@ def process_m3u8(cdn_url):
                 continue
             if line.startswith("#EXT-X-VERSION"):
                 has_version = True
+                rewritten.append(line)
+                continue
             if line.startswith("#"):
                 rewritten.append(line)
                 if line == "#EXTM3U" and not has_version:
@@ -79,14 +77,19 @@ def process_m3u8(cdn_url):
             rewritten.append(f"{self_url}/cdn/{encoded}.m3u8")
 
         return Response(
-            "\n".join(rewritten),
+            "\r\n".join(rewritten),
             content_type="application/vnd.apple.mpegurl",
             headers={"Access-Control-Allow-Origin": "*"}
         )
 
+    def generate():
+        for chunk in resp.iter_content(chunk_size=16384):
+            if chunk:
+                yield chunk
+
     ct = content_type if content_type else "video/mp2t"
     return Response(
-        resp.iter_content(chunk_size=8192),
+        stream_with_context(generate()),
         content_type=ct,
         headers={"Access-Control-Allow-Origin": "*"}
     )
@@ -98,9 +101,8 @@ def resolve_and_play(live_id):
     try:
         r1 = SESSION.get(stream_url, headers=headers, timeout=10)
         r1.raise_for_status()
-        site = r1.text
 
-        iframe = re.search(r'iframe[^>]+src=["\']([^"\']+)["\']', site, re.I)
+        iframe = re.search(r'iframe[^>]+src=["\']([^"\']+)["\']', r1.text, re.I)
         if not iframe:
             print("No iframe")
             return Response("Not found", status=404)
@@ -108,7 +110,6 @@ def resolve_and_play(live_id):
         data_url = iframe.group(1)
         r2 = SESSION.get(data_url, headers=headers, timeout=10)
         r2.raise_for_status()
-        site2 = r2.text
 
         patterns = [
             r"source:\s*window\.atob\('([^']+)'\)",
@@ -119,7 +120,7 @@ def resolve_and_play(live_id):
 
         link = None
         for pat in patterns:
-            m = re.search(pat, site2)
+            m = re.search(pat, r2.text)
             if m:
                 try:
                     link = base64.b64decode(m.group(1)).decode("utf-8") if "atob" in pat else m.group(1)
@@ -145,7 +146,8 @@ def health():
 @app.route("/cdn/<path:encoded_url>", methods=["GET"])
 def cdn_route(encoded_url):
     try:
-        encoded_url = encoded_url.replace(".m3u8", "")
+        if encoded_url.endswith(".m3u8"):
+            encoded_url = encoded_url[:-5]
         url = decode_url(encoded_url)
         return process_m3u8(url)
     except Exception as e:
@@ -161,7 +163,8 @@ def index():
 
 @app.route("/<live_id>", methods=["GET"])
 def play_id_raw(live_id):
-    live_id = live_id.replace(".m3u8", "")
+    if live_id.endswith(".m3u8"):
+        live_id = live_id[:-5]
     return resolve_and_play(live_id)
 
 if __name__ == "__main__":

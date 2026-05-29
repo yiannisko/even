@@ -28,12 +28,14 @@ def encode_url(url):
     return base64.urlsafe_b64encode(url.encode('utf-8')).decode('utf-8').rstrip('=')
 
 def decode_url(encoded_url):
-    padding = 4 - (len(encoded_url) % 4)
-    return base64.urlsafe_b64decode(encoded_url + "=" * padding).decode('utf-8')
+    padding = len(encoded_url) % 4
+    if padding:
+        encoded_url += "=" * (4 - padding)
+    return base64.urlsafe_b64decode(encoded_url).decode('utf-8')
 
 def process_m3u8(cdn_url):
     try:
-        resp = SESSION.get(cdn_url, headers=HEADERS_PROXY, allow_redirects=True, timeout=10)
+        resp = SESSION.get(cdn_url, headers=HEADERS_PROXY, allow_redirects=True, stream=True, timeout=15)
         resp.raise_for_status()
     except Exception as e:
         print(f"Fetch err: {e}")
@@ -41,15 +43,15 @@ def process_m3u8(cdn_url):
 
     content_type = resp.headers.get("Content-Type", "")
     is_m3u8 = (
-        "application/vnd.apple.mpegurl" in content_type
-        or "application/x-mpegURL" in content_type
+        "mpegurl" in content_type.lower()
         or re.search(r"\.m3u8", cdn_url, re.I)
     )
 
     if is_m3u8:
+        text = resp.content.decode('utf-8', errors='ignore')
         self_url = get_self_url()
         base_url = cdn_url[: cdn_url.rfind("/") + 1]
-        lines = resp.text.split("\n")
+        lines = text.split("\n")
         rewritten = []
         
         has_version = False
@@ -84,7 +86,7 @@ def process_m3u8(cdn_url):
 
     ct = content_type if content_type else "video/mp2t"
     return Response(
-        resp.iter_content(chunk_size=1024),
+        resp.iter_content(chunk_size=8192),
         content_type=ct,
         headers={"Access-Control-Allow-Origin": "*"}
     )
@@ -140,14 +142,14 @@ def resolve_and_play(live_id):
 def health():
     return Response("OK", status=200, content_type="text/plain")
 
-@app.route("/cdn/<encoded_url>", methods=["GET"])
+@app.route("/cdn/<path:encoded_url>", methods=["GET"])
 def cdn_route(encoded_url):
     try:
         encoded_url = encoded_url.replace(".m3u8", "")
         url = decode_url(encoded_url)
         return process_m3u8(url)
     except Exception as e:
-        print(f"CDN err: {e}")
+        print(f"Decode err: {e}")
         return Response("Decode err", status=400)
 
 @app.route("/", methods=["GET"])
@@ -163,4 +165,4 @@ def play_id_raw(live_id):
     return resolve_and_play(live_id)
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000, debug=False)
+    app.run(host="0.0.0.0", port=5000, debug=False)

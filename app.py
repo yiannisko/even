@@ -1,7 +1,7 @@
 import re
 import base64
 from urllib.parse import urlparse
-from flask import Flask, request, Response, stream_with_context
+from flask import Flask, request, Response
 import requests
 import urllib3
 
@@ -49,7 +49,7 @@ def make_proxy_url(base_url, link, ext):
 
 def process_m3u8(cdn_url):
     try:
-        resp = SESSION.get(cdn_url, headers=HEADERS_PROXY, allow_redirects=True, stream=True, timeout=15)
+        resp = SESSION.get(cdn_url, headers=HEADERS_PROXY, allow_redirects=True, timeout=15)
         resp.raise_for_status()
     except Exception as e:
         print(f"Fetch err: {e}")
@@ -79,8 +79,9 @@ def process_m3u8(cdn_url):
                 continue
 
             if line.startswith("#EXT-X-STREAM-INF"):
-                line = re.sub(r',AUDIO="[^"]+"', '', line)
-                out.append(line)
+                m = re.search(r'(BANDWIDTH=\d+)', line)
+                clean_line = f"#EXT-X-STREAM-INF:{m.group(1)}" if m else "#EXT-X-STREAM-INF:BANDWIDTH=4000000"
+                out.append(clean_line)
                 is_next_playlist = True
             elif line.startswith(("#EXT-X-TARGETDURATION", "#EXT-X-MEDIA-SEQUENCE", "#EXTINF", "#EXT-X-ENDLIST")):
                 out.append(line)
@@ -119,11 +120,6 @@ def process_m3u8(cdn_url):
         out_headers["Content-Type"] = "application/vnd.apple.mpegurl"
         return Response("\r\n".join(out), headers=out_headers)
 
-    def generate():
-        for chunk in resp.iter_content(chunk_size=16384):
-            if chunk:
-                yield chunk
-
     if "video" in content_type or "audio" in content_type:
         out_headers["Content-Type"] = content_type
     elif urlparse(cdn_url).path.endswith((".m4s", ".mp4")):
@@ -133,14 +129,9 @@ def process_m3u8(cdn_url):
     else:
         out_headers["Content-Type"] = "video/mp2t"
 
-    if "Content-Length" in resp.headers:
-        out_headers["Content-Length"] = resp.headers["Content-Length"]
-
-    return Response(
-        stream_with_context(generate()),
-        status=resp.status_code,
-        headers=out_headers
-    )
+    content = resp.content
+    out_headers["Content-Length"] = str(len(content))
+    return Response(content, status=resp.status_code, headers=out_headers)
 
 def resolve_and_play(live_id):
     stream_url = f"https://dlhd.pk/stream/stream-{live_id}.php"

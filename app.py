@@ -51,13 +51,20 @@ def process_m3u8(cdn_url):
         base_url = cdn_url[: cdn_url.rfind("/") + 1]
         lines = resp.text.split("\n")
         rewritten = []
+        
+        has_version = False
 
         for line in lines:
             line = line.strip()
             if not line:
                 continue
+            if line.startswith("#EXT-X-VERSION"):
+                has_version = True
             if line.startswith("#"):
                 rewritten.append(line)
+                if line == "#EXTM3U" and not has_version:
+                    rewritten.append("#EXT-X-VERSION:3")
+                    has_version = True
                 continue
 
             if not re.match(r"^https?://", line):
@@ -67,7 +74,7 @@ def process_m3u8(cdn_url):
                 line = base_url + line
 
             encoded = encode_url(line)
-            rewritten.append(f"{self_url}/cdn/{encoded}")
+            rewritten.append(f"{self_url}/cdn/{encoded}.m3u8")
 
         return Response(
             "\n".join(rewritten),
@@ -136,6 +143,7 @@ def health():
 @app.route("/cdn/<encoded_url>", methods=["GET"])
 def cdn_route(encoded_url):
     try:
+        encoded_url = encoded_url.replace(".m3u8", "")
         url = decode_url(encoded_url)
         return process_m3u8(url)
     except Exception as e:
@@ -155,4 +163,4 @@ def play_id_raw(live_id):
     return resolve_and_play(live_id)
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    app.run(host="0.0.0.0", port=10000, debug=False)

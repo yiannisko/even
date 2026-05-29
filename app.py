@@ -133,6 +133,10 @@ def resolve_and_play(live_id):
 def health():
     return Response("OK", status=200, content_type="text/plain")
 
+@app.route("/favicon.ico")
+def favicon():
+    return "", 204
+
 @app.route("/cdn/<encoded_url>", methods=["GET"])
 def cdn_route(encoded_url):
     try:

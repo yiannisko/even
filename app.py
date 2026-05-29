@@ -9,6 +9,9 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 SESSION = requests.Session()
+adapter = requests.adapters.HTTPAdapter(pool_connections=100, pool_maxsize=100)
+SESSION.mount('http://', adapter)
+SESSION.mount('https://', adapter)
 SESSION.verify = False
 
 HEADERS_TV = {
@@ -33,7 +36,7 @@ def decode_url(encoded_url):
 
 def process_m3u8(cdn_url):
     try:
-        resp = SESSION.get(cdn_url, headers=HEADERS_PROXY, allow_redirects=True, timeout=10)
+        resp = SESSION.get(cdn_url, headers=HEADERS_PROXY, allow_redirects=True, stream=True, timeout=10)
         resp.raise_for_status()
     except Exception as e:
         print(f"Fetch err: {e}")
@@ -49,7 +52,7 @@ def process_m3u8(cdn_url):
     if is_m3u8:
         self_url = get_self_url()
         base_url = cdn_url[: cdn_url.rfind("/") + 1]
-        lines = resp.text.split("\n")
+        lines = resp.content.decode('utf-8', errors='ignore').split("\n")
         rewritten = []
 
         for line in lines:
@@ -76,10 +79,15 @@ def process_m3u8(cdn_url):
         )
 
     ct = content_type if content_type else "video/mp2t"
+    headers = {"Access-Control-Allow-Origin": "*"}
+    
+    if "Content-Length" in resp.headers:
+        headers["Content-Length"] = resp.headers["Content-Length"]
+
     return Response(
-        resp.iter_content(chunk_size=1024),
+        resp.iter_content(chunk_size=65536),
         content_type=ct,
-        headers={"Access-Control-Allow-Origin": "*"}
+        headers=headers
     )
 
 def resolve_and_play(live_id):

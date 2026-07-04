@@ -88,8 +88,8 @@ def process_m3u8(cdn_url):
     )
 
 def resolve_and_play(live_id):
-    stream_url = f"https://dlhd.pk/stream/stream-{live_id}.php"
-    headers = {**HEADERS_TV, "referer": f"https://dlhd.pk/watch.php?id={live_id}"}
+    stream_url = f"https://dlhd.st/stream/stream-{live_id}.php"
+    headers = {**HEADERS_TV, "referer": f"https://dlhd.st/watch.php?id={live_id}"}
     
     try:
         r1 = SESSION.get(stream_url, headers=headers, timeout=10)

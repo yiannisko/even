@@ -26,11 +26,14 @@ def process_m3u8(cdn_url, req_referer=None):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Referer": ref,
-        "Origin": ref.rstrip("/")
+        "Origin": ref.rstrip("/"),
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "cross-site"
     }
     
     try:
-        resp = SESSION.get(cdn_url, headers=headers, allow_redirects=True, stream=True, timeout=15)
+        resp = requests.get(cdn_url, headers=headers, allow_redirects=True, stream=True, timeout=15, verify=False)
         resp.raise_for_status()
     except Exception:
         return Response("Stream offline", status=502)
@@ -67,6 +70,8 @@ def process_m3u8(cdn_url, req_referer=None):
 
             encoded = encode_url(line)
             rewritten.append(f"{self_url}/cdn/{encoded}?ref={safe_ref}")
+            
+        resp.close()
 
         return Response(
             "\n".join(rewritten),
@@ -79,8 +84,15 @@ def process_m3u8(cdn_url, req_referer=None):
     if "Content-Length" in resp.headers:
         resp_headers["Content-Length"] = resp.headers["Content-Length"]
 
+    def generate():
+        try:
+            for chunk in resp.iter_content(chunk_size=65536):
+                yield chunk
+        finally:
+            resp.close()
+
     return Response(
-        resp.iter_content(chunk_size=65536),
+        generate(),
         content_type=ct,
         headers=resp_headers
     )

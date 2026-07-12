@@ -98,54 +98,57 @@ def process_m3u8(cdn_url, req_referer=None):
     )
 
 def resolve_and_play(live_id):
-    stream_url = f"https://dlhd.st/stream/stream-{live_id}.php"
+    base_paths = ["stream", "cast", "watch", "plus", "casting", "player"]
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Referer": f"https://dlhd.st/watch.php?id={live_id}"
     }
     
-    try:
-        r1 = SESSION.get(stream_url, headers=headers, timeout=10)
-        r1.raise_for_status()
-        site = r1.text
+    for path in base_paths:
+        stream_url = f"https://dlhd.st/{path}/stream-{live_id}.php"
+        try:
+            r1 = SESSION.get(stream_url, headers=headers, timeout=10)
+            if r1.status_code != 200:
+                continue
+            site = r1.text
 
-        iframe = re.search(r'iframe[^>]+src=["\']([^"\']+)["\']', site, re.I)
-        if not iframe:
-            return Response("Not found", status=404)
+            iframe = re.search(r'iframe[^>]+src=["\']([^"\']+)["\']', site, re.I)
+            if not iframe:
+                continue
 
-        data_url = iframe.group(1)
-        parsed_iframe = urlparse(data_url)
-        iframe_origin = f"{parsed_iframe.scheme}://{parsed_iframe.netloc}/"
+            data_url = iframe.group(1)
+            parsed_iframe = urlparse(data_url)
+            iframe_origin = f"{parsed_iframe.scheme}://{parsed_iframe.netloc}/"
 
-        r2 = SESSION.get(data_url, headers=headers, timeout=10)
-        r2.raise_for_status()
-        site2 = r2.text
+            r2 = SESSION.get(data_url, headers=headers, timeout=10)
+            if r2.status_code != 200:
+                continue
+            site2 = r2.text
 
-        patterns = [
-            r"source:\s*window\.atob\('([^']+)'\)",
-            r"atob\(['\"]([^'\"]+)['\"]\)",
-            r'source:\s*["\']([^"\']+)["\']',
-            r'file:\s*["\']([^"\']+)["\']',
-        ]
+            patterns = [
+                r"source:\s*window\.atob\('([^']+)'\)",
+                r"atob\(['\"]([^'\"]+)['\"]\)",
+                r'source:\s*["\']([^"\']+)["\']',
+                r'file:\s*["\']([^"\']+)["\']',
+            ]
 
-        link = None
-        for pat in patterns:
-            m = re.search(pat, site2)
-            if m:
-                try:
-                    link = base64.b64decode(m.group(1)).decode("utf-8") if "atob" in pat else m.group(1)
-                    break
-                except Exception:
-                    link = m.group(1)
-                    break
-        
-        if link:
-            return process_m3u8(link, req_referer=iframe_origin)
-        
-        return Response("Not found", status=404)
-
-    except Exception:
-        return Response("Proxy err", status=502)
+            link = None
+            for pat in patterns:
+                m = re.search(pat, site2)
+                if m:
+                    try:
+                        link = base64.b64decode(m.group(1)).decode("utf-8") if "atob" in pat else m.group(1)
+                        break
+                    except Exception:
+                        link = m.group(1)
+                        break
+            
+            if link:
+                return process_m3u8(link, req_referer=iframe_origin)
+        except Exception:
+            continue
+            
+    return Response("Not found", status=404)
 
 @app.route("/health", methods=["GET"])
 def health():

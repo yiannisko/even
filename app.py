@@ -57,6 +57,7 @@ def process_m3u8(cdn_url):
             line = line.strip()
             if not line:
                 continue
+
             if line.startswith("#"):
                 rewritten.append(line)
                 continue
@@ -108,9 +109,9 @@ def resolve_and_play(live_id):
 
         patterns = [
             r"source:\s*window\.atob\('([^']+)'\)",
-            r"atob\('([^']+)'\)",
-            r'file:\s*["\']([^"\']+\.m3u8[^"\']*)["\']',
-            r'source:\s*["\']([^"\']+\.m3u8[^"\']*)["\']',
+            r"atob\(['\"]([^'\"]+)['\"]\)",
+            r'source:\s*["\']([^"\']+)["\']',
+            r'file:\s*["\']([^"\']+)["\']',
         ]
 
         link = None
@@ -126,7 +127,7 @@ def resolve_and_play(live_id):
         
         if link:
             return process_m3u8(link)
-            
+        
         print("No link")
         return Response("Not found", status=404)
 

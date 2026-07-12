@@ -1,6 +1,6 @@
 import re
 import base64
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote
 from flask import Flask, request, Response
 import requests
 import urllib3
@@ -10,16 +10,6 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 app = Flask(__name__)
 SESSION = requests.Session()
 SESSION.verify = False
-
-HEADERS_TV = {
-    "user-agent": "Mozilla/5.0 (WebOS; SmartTV)",
-    "accept": "*/*",
-    "accept-language": "en-US,en;q=0.9",
-}
-
-HEADERS_PROXY = {
-    "User-Agent": "Mozilla/5.0 (compatible; Proxy/1.0)",
-}
 
 def get_self_url():
     return f"{request.scheme}://{request.host}"
@@ -31,12 +21,18 @@ def decode_url(encoded_url):
     padding = 4 - (len(encoded_url) % 4)
     return base64.urlsafe_b64decode(encoded_url + "=" * padding).decode('utf-8')
 
-def process_m3u8(cdn_url):
+def process_m3u8(cdn_url, req_referer=None):
+    ref = req_referer or request.args.get('ref', 'https://dlhd.st/')
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Referer": ref,
+        "Origin": ref.rstrip("/")
+    }
+    
     try:
-        resp = SESSION.get(cdn_url, headers=HEADERS_PROXY, allow_redirects=True, stream=True, timeout=15)
+        resp = SESSION.get(cdn_url, headers=headers, allow_redirects=True, stream=True, timeout=15)
         resp.raise_for_status()
-    except Exception as e:
-        print(f"Fetch err: {e}")
+    except Exception:
         return Response("Stream offline", status=502)
 
     content_type = resp.headers.get("Content-Type", "")
@@ -52,6 +48,7 @@ def process_m3u8(cdn_url):
         text_content = resp.content.decode('utf-8', errors='ignore')
         lines = text_content.split("\n")
         rewritten = []
+        safe_ref = quote(ref)
 
         for line in lines:
             line = line.strip()
@@ -69,7 +66,7 @@ def process_m3u8(cdn_url):
                 line = base_url + line
 
             encoded = encode_url(line)
-            rewritten.append(f"{self_url}/cdn/{encoded}")
+            rewritten.append(f"{self_url}/cdn/{encoded}?ref={safe_ref}")
 
         return Response(
             "\n".join(rewritten),
@@ -78,19 +75,22 @@ def process_m3u8(cdn_url):
         )
 
     ct = content_type if content_type else "video/mp2t"
-    headers = {"Access-Control-Allow-Origin": "*"}
+    resp_headers = {"Access-Control-Allow-Origin": "*"}
     if "Content-Length" in resp.headers:
-        headers["Content-Length"] = resp.headers["Content-Length"]
+        resp_headers["Content-Length"] = resp.headers["Content-Length"]
 
     return Response(
         resp.iter_content(chunk_size=65536),
         content_type=ct,
-        headers=headers
+        headers=resp_headers
     )
 
 def resolve_and_play(live_id):
     stream_url = f"https://dlhd.st/stream/stream-{live_id}.php"
-    headers = {**HEADERS_TV, "referer": f"https://dlhd.st/watch.php?id={live_id}"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Referer": f"https://dlhd.st/watch.php?id={live_id}"
+    }
     
     try:
         r1 = SESSION.get(stream_url, headers=headers, timeout=10)
@@ -99,10 +99,12 @@ def resolve_and_play(live_id):
 
         iframe = re.search(r'iframe[^>]+src=["\']([^"\']+)["\']', site, re.I)
         if not iframe:
-            print("No iframe")
             return Response("Not found", status=404)
 
         data_url = iframe.group(1)
+        parsed_iframe = urlparse(data_url)
+        iframe_origin = f"{parsed_iframe.scheme}://{parsed_iframe.netloc}/"
+
         r2 = SESSION.get(data_url, headers=headers, timeout=10)
         r2.raise_for_status()
         site2 = r2.text
@@ -126,13 +128,11 @@ def resolve_and_play(live_id):
                     break
         
         if link:
-            return process_m3u8(link)
+            return process_m3u8(link, req_referer=iframe_origin)
         
-        print("No link")
         return Response("Not found", status=404)
 
-    except Exception as e:
-        print(f"Resolve err: {e}")
+    except Exception:
         return Response("Proxy err", status=502)
 
 @app.route("/health", methods=["GET"])
@@ -148,8 +148,7 @@ def cdn_route(encoded_url):
     try:
         url = decode_url(encoded_url)
         return process_m3u8(url)
-    except Exception as e:
-        print(f"CDN err: {e}")
+    except Exception:
         return Response("Decode err", status=400)
 
 @app.route("/", methods=["GET"])

@@ -22,7 +22,7 @@ def decode_url(encoded_url):
     return base64.urlsafe_b64decode(encoded_url + "=" * padding).decode('utf-8')
 
 def process_m3u8(cdn_url, req_referer=None):
-    ref = req_referer or request.args.get('ref', 'https://dlhd.st/')
+    ref = req_referer or request.args.get('ref', 'https://dlstreams.st/')
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Referer": ref,
@@ -101,11 +101,11 @@ def resolve_and_play(live_id):
     base_paths = ["stream", "cast", "watch", "plus", "casting", "player"]
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Referer": f"https://dlhd.st/watch.php?id={live_id}"
+        "Referer": f"https://dlstreams.st/watch.php?id={live_id}"
     }
     
     for path in base_paths:
-        stream_url = f"https://dlhd.st/{path}/stream-{live_id}.php"
+        stream_url = f"https://dlstreams.st/{path}/stream-{live_id}.php"
         try:
             r1 = SESSION.get(stream_url, headers=headers, timeout=10)
             if r1.status_code != 200:
